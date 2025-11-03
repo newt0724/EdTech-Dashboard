@@ -31,7 +31,7 @@ def fetch_codeforces_data(username):
             if data["status"] == "OK":
                 user = data["result"][0]
                 return {
-                    "rating": user.get("rating", "N/A"),
+                    "rating": user.get("rating", 0),
                     "maxRating": user.get("maxRating", "N/A"),
                     "rank": user.get("rank", "N/A"),
                     "maxRank": user.get("maxRank", "N/A")
@@ -93,41 +93,105 @@ def fetch_github_data(username):
 # -----------------------------
 # 🔹 Input Parsing Function
 # -----------------------------
+# def parse_input(user_input):
+#     if not user_input:
+#         return None, None
+
+#     u = user_input.strip()
+#     u = re.sub(r"^https?://", "", u, flags=re.I)
+#     u = re.sub(r"^www\.", "", u, flags=re.I)
+#     u = u.split("?", 1)[0].split("#", 1)[0]
+
+#     platforms = {
+#         "leetcode.com": ("leetcode", r"(?:u/)?([^/]+)/?$"),
+#         "leetcode-cn.com": ("leetcode", r"(?:u/)?([^/]+)/?$"),
+#         "hackerrank.com": ("hackerrank", r"([^/]+)/?$"),
+#         "codeforces.com": ("codeforces", r"(?:profile/)?([^/]+)/?$"),
+#         "codechef.com": ("codechef", r"(?:users/)?([^/]+)/?$"),
+#         "github.com": ("github", r"([^/]+)/?$"),
+#     }
+
+#     for domain, (platform, pattern) in platforms.items():
+#         if domain.lower() in u.lower():
+#             match = re.search(pattern, u, flags=re.I)
+#             if match:
+#                 username = match.group(1).strip()
+#                 if username:
+#                     return platform, username
+#                 else:
+#                     return None, None
+
+#     if "/" in u:
+#         parts = [p for p in u.split("/") if p]
+#         if len(parts) >= 2:
+#             fallback_username = parts[-1]
+#             return "leetcode", fallback_username
+
+#     return "leetcode", u
+
+import re
+
 def parse_input(user_input):
+    """
+    Parses a user input string (URL or raw username) to find a 
+    platform and username.
+    """
     if not user_input:
         return None, None
 
+    # --- 1. Clean the input string ---
     u = user_input.strip()
+    # Remove protocol (http, https)
     u = re.sub(r"^https?://", "", u, flags=re.I)
+    # Remove "www."
     u = re.sub(r"^www\.", "", u, flags=re.I)
+    # Remove query strings and fragments
     u = u.split("?", 1)[0].split("#", 1)[0]
+    # Remove any trailing slash
+    u = u.rstrip('/')
 
-    platforms = {
-        "leetcode.com": ("leetcode", r"(?:u/)?([^/]+)/?$"),
-        "leetcode-cn.com": ("leetcode", r"(?:u/)?([^/]+)/?$"),
-        "hackerrank.com": ("hackerrank", r"([^/]+)/?$"),
-        "codeforces.com": ("codeforces", r"(?:profile/)?([^/]+)/?$"),
-        "codechef.com": ("codechef", r"(?:users/)?([^/]+)/?$"),
-        "github.com": ("github", r"([^/]+)/?$"),
-    }
+    # --- 2. Define platform patterns ---
+    # This list now contains tuples of (platform_name, regex_pattern)
+    # Each regex is "anchored" with ^ (start) and $ (end) to ensure 
+    # it matches the *entire* string and nothing else.
+    # This prevents partial matches like "github.com/org/repo".
+    platform_patterns = [
+        # LeetCode: leetcode.com/username or leetcode.com/u/username
+        ("leetcode", r"^leetcode\.com/(?:u/)?([^/]+)$"),
+        ("leetcode", r"^leetcode-cn\.com/(?:u/)?([^/]+)$"),
+        
+        # HackerRank: hackerrank.com/username
+        ("hackerrank", r"^hackerrank\.com/([^/]+)$"),
+        
+        # Codeforces: codeforces.com/profile/username
+        ("codeforces", r"^codeforces\.com/profile/([^/]+)$"),
+        
+        # CodeChef: codechef.com/users/username
+        ("codechef", r"^codechef\.com/users/([^/]+)$"),
+        
+        # GitHub: github.com/username
+        ("github", r"^github\.com/([^/]+)$"),
+    ]
 
-    for domain, (platform, pattern) in platforms.items():
-        if domain.lower() in u.lower():
-            match = re.search(pattern, u, flags=re.I)
-            if match:
-                username = match.group(1).strip()
-                if username:
-                    return platform, username
-                else:
-                    return None, None
+    # --- 3. Match against platform URLs ---
+    for platform, pattern in platform_patterns:
+        match = re.search(pattern, u, flags=re.I)
+        if match:
+            # group(1) captures the part in parentheses (the username)
+            username = match.group(1).strip()
+            if username:
+                return platform, username
 
-    if "/" in u:
-        parts = [p for p in u.split("/") if p]
-        if len(parts) >= 2:
-            fallback_username = parts[-1]
-            return "leetcode", fallback_username
+    # --- 4. Fallback: Check for raw username ---
+    # If no URL pattern matched AND the string has no slashes,
+    # assume it's a raw username and default to "leetcode".
+    if "/" not in u:
+        return "leetcode", u
 
-    return "leetcode", u
+    # --- 5. No match ---
+    # If it had slashes but didn't match (e.g., "github.com/org/repo"),
+    # it's an unsupported URL format.
+    return None, None
 
 # -----------------------------
 # 🔹 Streamlit UI
@@ -233,14 +297,22 @@ def get_performance_score(json_content):
     platform, username = parse_input(json_content['platform link'][0])
     performance = 0
     if platform == 'leetcode':
-        performance = fetch_leetcode_data(username).get('acceptanceRate')
+        data = fetch_leetcode_data(username)
+        if data and 'acceptanceRate' in data:
+            performance = data['acceptanceRate']
     elif platform == "github":
-        performance = fetch_github_data(username)
+        data = fetch_github_data(username)
+        if data and 'public_repos' in data and 'followers' in data:
+            # Simple scoring logic for GitHub
+            performance = min(100, data['public_repos'] + data['followers'] // 10)
     elif platform == "codeforces":
-        performance = fetch_codeforces_data(username)
+        data = fetch_codeforces_data(username)
+        if data and 'rating' in data:
+            # Normalize rating to a 0-100 scale (assuming max rating is ~3500)
+            performance = min(100, (data['rating'] / 3500) * 100) if data['rating'] else 0
     else:
         # It's a platform you don't recognize.
         # You could log this or set a specific value.
         print(f"Warning: Unknown platform '{platform}' encountered.")
-        performance = -1  # Or None, or -1, etc.
+        performance = 0  # Or None, or -1, etc.
     return performance
